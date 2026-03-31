@@ -22,13 +22,14 @@ const TRADER_BADGES = ['Top 5%', 'High Accuracy', 'Whale', 'Sniper', 'Rising Sta
 const MARKETS = [
   {
     id: '1',
-    creator: { name: 'CryptoWhale', avatar: 'https://picsum.photos/seed/whale/100/100', badge: 'VIP' },
+    creator: { id: 'c1', name: 'CryptoWhale', avatar: 'https://picsum.photos/seed/whale/100/100', badge: 'VIP' },
     question: 'Will Bitcoin hit $100k before May?',
     yesPool: 68000,
     noPool: 32000,
     volume: 2400000,
     participants: 1245,
     timeRemaining: '12d 4h',
+    likes: 1240,
     recentActivity: [
       { id: 'a1', user: 'Alex', avatar: 'https://picsum.photos/seed/u1/32/32', action: 'bought $500 YES', side: 'YES', amount: 500, level: 42, accuracy: 68, badge: 'Top 5%' },
       { id: 'a2', user: 'Sarah', avatar: 'https://picsum.photos/seed/u2/32/32', action: 'bought $150 NO', side: 'NO', amount: 150, level: 15, accuracy: 54, badge: null },
@@ -36,26 +37,28 @@ const MARKETS = [
   },
   {
     id: '2',
-    creator: { name: 'TechInsider', avatar: 'https://picsum.photos/seed/tech/100/100', badge: 'PRO' },
+    creator: { id: 'c2', name: 'TechInsider', avatar: 'https://picsum.photos/seed/tech/100/100', badge: 'PRO' },
     question: 'Will Apple announce a foldable iPhone in 2026?',
     yesPool: 41000,
     noPool: 59000,
     volume: 850000,
     participants: 432,
     timeRemaining: '45d 12h',
+    likes: 856,
     recentActivity: [
       { id: 'a3', user: 'Mike', avatar: 'https://picsum.photos/seed/u3/32/32', action: 'bought $1k NO', side: 'NO', amount: 1000, level: 89, accuracy: 72, badge: 'Whale' },
     ]
   },
   {
     id: '3',
-    creator: { name: 'PolitiPredict', avatar: 'https://picsum.photos/seed/pol/100/100', badge: 'EXPERT' },
+    creator: { id: 'c3', name: 'PolitiPredict', avatar: 'https://picsum.photos/seed/pol/100/100', badge: 'EXPERT' },
     question: 'Will the Fed cut rates in the next meeting?',
     yesPool: 82000,
     noPool: 18000,
     volume: 5100000,
     participants: 3890,
     timeRemaining: '3d 8h',
+    likes: 3421,
     recentActivity: [
       { id: 'a4', user: 'TraderX', avatar: 'https://picsum.photos/seed/u4/32/32', action: 'bought $2k YES', side: 'YES', amount: 2000, level: 55, accuracy: 61, badge: 'Sniper' },
       { id: 'a5', user: 'Emma', avatar: 'https://picsum.photos/seed/u5/32/32', action: 'bought $50 YES', side: 'YES', amount: 50, level: 8, accuracy: 49, badge: null },
@@ -555,6 +558,109 @@ const CircularIndicator = memo(function CircularIndicator({ yesPool, noPool, fla
   );
 });
 
+const LikeButton = memo(function LikeButton({ marketId, initialLikes = 0 }: { marketId: string, initialLikes?: number }) {
+  const [isLiked, setIsLiked] = useState(false);
+  const likesRef = useRef(initialLikes);
+  const [likes, setLikes] = useState(initialLikes);
+
+  const handleLike = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation();
+    setIsLiked(prev => {
+      const next = !prev;
+      likesRef.current += next ? 1 : -1;
+      setLikes(likesRef.current);
+      return next;
+    });
+  }, []);
+
+  return (
+    <button onClick={handleLike} className="flex flex-col items-center gap-1 group pointer-events-auto">
+      <motion.div
+        animate={{ scale: isLiked ? [0.95, 1.1, 1] : 1 }}
+        transition={{ duration: 0.3 }}
+        className={`w-12 h-12 rounded-full flex items-center justify-center backdrop-blur-md border transition-colors ${isLiked ? 'bg-yes/20 border-yes/50 text-yes' : 'bg-black/40 border-white/10 text-white/70 hover:bg-white/10'}`}
+      >
+        <Heart size={24} className={isLiked ? 'fill-yes' : ''} />
+      </motion.div>
+      <span className="text-xs font-bold text-white/80">{likes}</span>
+    </button>
+  );
+});
+
+const ShareButton = memo(function ShareButton({ marketId }: { marketId: string }) {
+  const [copied, setCopied] = useState(false);
+
+  const handleShare = useCallback(async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    const url = `${window.location.origin}/market/${marketId}`;
+    
+    if (navigator.share) {
+      try {
+        await navigator.share({
+          title: 'Predix Market',
+          text: 'Check out this prediction market!',
+          url: url,
+        });
+      } catch (err) {
+        // Fallback to copy if share fails (e.g., user cancelled)
+        if ((err as Error).name !== 'AbortError') {
+          navigator.clipboard.writeText(url);
+          setCopied(true);
+          setTimeout(() => setCopied(false), 2000);
+        }
+      }
+    } else {
+      navigator.clipboard.writeText(url);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }
+  }, [marketId]);
+
+  return (
+    <button onClick={handleShare} className="flex flex-col items-center gap-1 group relative pointer-events-auto">
+      <motion.div 
+        whileTap={{ scale: 0.95 }}
+        className="w-12 h-12 rounded-full flex items-center justify-center bg-black/40 backdrop-blur-md border border-white/10 text-white/70 hover:bg-white/10 transition-colors"
+      >
+        <Share2 size={24} />
+      </motion.div>
+      <span className="text-xs font-bold text-white/80">Share</span>
+      <AnimatePresence>
+        {copied && (
+          <motion.div
+            initial={{ opacity: 0, y: 10, scale: 0.9 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: -10, scale: 0.9 }}
+            className="absolute -top-10 bg-white text-black text-xs font-bold px-3 py-1.5 rounded-full whitespace-nowrap shadow-lg"
+          >
+            Copied!
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </button>
+  );
+});
+
+const FollowButton = memo(function FollowButton({ traderId, initialIsFollowing = false }: { traderId: string, initialIsFollowing?: boolean }) {
+  const [isFollowing, setIsFollowing] = useState(initialIsFollowing);
+
+  const handleFollow = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation();
+    setIsFollowing(prev => !prev);
+  }, []);
+
+  return (
+    <motion.button
+      onClick={handleFollow}
+      animate={{ scale: isFollowing ? [0.95, 1] : [0.95, 1] }}
+      transition={{ duration: 0.2 }}
+      className={`absolute -bottom-1 -right-1 w-6 h-6 rounded-full flex items-center justify-center border-2 border-background shadow-lg pointer-events-auto ${isFollowing ? 'bg-white/20 text-white backdrop-blur-md' : 'bg-primary text-white'}`}
+    >
+      {isFollowing ? <Check size={12} strokeWidth={3} /> : <Plus size={12} strokeWidth={3} />}
+    </motion.button>
+  );
+});
+
 const FeedItem = memo(function FeedItem({ market, isActive, onTrade, position, onOpenTrader, onCopyTrade, resolvedState }: { market: Market, isActive: boolean, onTrade: (market: Market, side: 'YES' | 'NO') => void, position?: { side: 'YES' | 'NO', amount: number, price: number }, onOpenTrader: (trader: any) => void, onCopyTrade: (market: Market, side: 'YES' | 'NO', amount: number) => void, resolvedState?: { result: 'YES' | 'NO', payout: number } }) {
   
   const currentYesPool = market.yesPool;
@@ -698,6 +804,12 @@ const FeedItem = memo(function FeedItem({ market, isActive, onTrade, position, o
         </AnimatePresence>
       </div>
 
+      {/* Right Side Actions */}
+      <div className="absolute right-4 bottom-56 z-40 flex flex-col gap-6 items-center pointer-events-none">
+        <LikeButton marketId={market.id} initialLikes={market.likes || 0} />
+        <ShareButton marketId={market.id} />
+      </div>
+
       {/* Bottom Area: Creator & Stats */}
       <div className="absolute bottom-0 left-0 right-0 p-6 z-20 flex flex-col justify-end bg-gradient-to-t from-background/90 via-background/40 to-transparent pb-safe h-48 pointer-events-none">
         <div className="pointer-events-auto flex flex-col gap-3">
@@ -730,6 +842,7 @@ const FeedItem = memo(function FeedItem({ market, isActive, onTrade, position, o
               <div className="w-12 h-12 rounded-full overflow-hidden border-2 border-white/20 group-hover:border-white/50 transition-colors shadow-lg">
                 <Image src={market.creator.avatar} alt={market.creator.name} width={48} height={48} className="object-cover" />
               </div>
+              <FollowButton traderId={market.creator.id} />
             </button>
 
             {/* Right: Improved Stats */}
