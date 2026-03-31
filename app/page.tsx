@@ -2,47 +2,19 @@
 
 import { useState, useRef, useEffect, useMemo, useCallback, memo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { House, ChartNoAxesColumn, Plus, Wallet, User, Ellipsis, Share2, MessageCircle, TrendingUp, X, CircleCheck, ArrowUpRight, ArrowDownRight, Clock, Heart } from 'lucide-react';
+import { House, ChartNoAxesColumn, Plus, Wallet, User, Ellipsis, Share2, MessageCircle, TrendingUp, X, CircleCheck, ArrowUpRight, ArrowDownRight, Clock, Heart, Trophy, Copy, Check, Gift, Rocket } from 'lucide-react';
 import Image from 'next/image';
+import { useRealtimeMarkets, Market } from '@/hooks/useRealtimeMarkets';
 
 // --- Utility ---
-function useAnimatedValue(value: number, duration: number = 0.5) {
-  const [displayValue, setDisplayValue] = useState(value);
-  const displayValueRef = useRef(value);
-  
-  useEffect(() => {
-    let startTimestamp: number;
-    let animationFrameId: number;
-    const startValue = displayValueRef.current;
-    const change = value - startValue;
-    
-    if (change === 0) return;
-
-    const step = (timestamp: number) => {
-      if (!startTimestamp) startTimestamp = timestamp;
-      const progress = Math.min((timestamp - startTimestamp) / (duration * 1000), 1);
-      
-      // Easing function (easeOutExpo)
-      const easeProgress = progress === 1 ? 1 : 1 - Math.pow(2, -10 * progress);
-      
-      const currentValue = startValue + change * easeProgress;
-      setDisplayValue(currentValue);
-      displayValueRef.current = currentValue;
-      
-      if (progress < 1) {
-        animationFrameId = window.requestAnimationFrame(step);
-      } else {
-        setDisplayValue(value);
-        displayValueRef.current = value;
-      }
-    };
-    
-    animationFrameId = window.requestAnimationFrame(step);
-    return () => window.cancelAnimationFrame(animationFrameId);
-  }, [value, duration]);
-
-  return displayValue;
-}
+const getPrices = (yesPool: number, noPool: number) => {
+  const total = yesPool + noPool;
+  if (total === 0) return { yesPrice: 0.50, noPrice: 0.50 };
+  let yesPrice = yesPool / total;
+  yesPrice = Math.max(0.01, Math.min(0.99, yesPrice));
+  const noPrice = 1 - yesPrice;
+  return { yesPrice, noPrice };
+};
 
 // --- Mock Data ---
 const TRADER_BADGES = ['Top 5%', 'High Accuracy', 'Whale', 'Sniper', 'Rising Star'];
@@ -52,8 +24,8 @@ const MARKETS = [
     id: '1',
     creator: { name: 'CryptoWhale', avatar: 'https://picsum.photos/seed/whale/100/100', badge: 'VIP' },
     question: 'Will Bitcoin hit $100k before May?',
-    yesPercent: 68,
-    noPercent: 32,
+    yesPool: 68000,
+    noPool: 32000,
     volume: 2400000,
     participants: 1245,
     timeRemaining: '12d 4h',
@@ -66,8 +38,8 @@ const MARKETS = [
     id: '2',
     creator: { name: 'TechInsider', avatar: 'https://picsum.photos/seed/tech/100/100', badge: 'PRO' },
     question: 'Will Apple announce a foldable iPhone in 2026?',
-    yesPercent: 41,
-    noPercent: 59,
+    yesPool: 41000,
+    noPool: 59000,
     volume: 850000,
     participants: 432,
     timeRemaining: '45d 12h',
@@ -79,8 +51,8 @@ const MARKETS = [
     id: '3',
     creator: { name: 'PolitiPredict', avatar: 'https://picsum.photos/seed/pol/100/100', badge: 'EXPERT' },
     question: 'Will the Fed cut rates in the next meeting?',
-    yesPercent: 82,
-    noPercent: 18,
+    yesPool: 82000,
+    noPool: 18000,
     volume: 5100000,
     participants: 3890,
     timeRemaining: '3d 8h',
@@ -216,20 +188,30 @@ function formatCurrency(value: number) {
   return `$${value}`;
 }
 
-const TradeModal = memo(function TradeModal({ isOpen, onClose, market, initialSide, initialStake = 50, onConfirmTrade }: { isOpen: boolean, onClose: () => void, market: typeof MARKETS[0] | null, initialSide: 'YES' | 'NO', initialStake?: number, onConfirmTrade: (marketId: string, side: 'YES' | 'NO', amount: number, price: number) => void }) {
+const TradeModal = memo(function TradeModal({ isOpen, onClose, market, initialSide, initialStake = 50, onConfirmTrade }: { isOpen: boolean, onClose: () => void, market: Market | null, initialSide: 'YES' | 'NO', initialStake?: number, onConfirmTrade: (marketId: string, side: 'YES' | 'NO', amount: number, price: number) => Promise<boolean> | void }) {
   const [stake, setStake] = useState(initialStake);
   const [side, setSide] = useState<'YES' | 'NO'>(initialSide);
   const [isSuccess, setIsSuccess] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   useEffect(() => {
-    // Only update if the modal is opened with new initial values
-    // This effect handles the case where the modal is already open but the market changes
-    // It's better to handle this via a key on the modal or by passing the values directly
-  }, [initialSide, initialStake]);
+    if (isOpen) {
+      setStake(initialStake);
+      setSide(initialSide);
+      setIsSuccess(false);
+      setIsSubmitting(false);
+    }
+  }, [isOpen, initialSide, initialStake]);
 
   if (!market) return null;
 
-  const price = side === 'YES' ? market.yesPercent : market.noPercent;
+  const currentYesPool = market.yesPool;
+  const currentNoPool = market.noPool;
+  const { yesPrice, noPrice } = getPrices(currentYesPool, currentNoPool);
+  const yesPercent = yesPrice * 100;
+  const noPercent = noPrice * 100;
+
+  const price = side === 'YES' ? yesPercent : noPercent;
   const shares = stake > 0 ? Math.floor((stake / price) * 100) : 0;
   const potentialReturn = shares;
   const roi = stake > 0 ? (((potentialReturn - stake) / stake) * 100).toFixed(1) : "0.0";
@@ -237,17 +219,26 @@ const TradeModal = memo(function TradeModal({ isOpen, onClose, market, initialSi
 
   const presetAmounts = [10, 50, 100, 500];
 
-  const handleBuy = () => {
-    if (stake <= 0) return; // Prevent 0 or negative trades
+  const handleBuy = async () => {
+    if (stake <= 0 || isSubmitting) return; // Prevent 0 or negative trades
     
     if (typeof window !== 'undefined' && window.navigator && window.navigator.vibrate) {
       window.navigator.vibrate(50);
     }
-    setIsSuccess(true);
-    setTimeout(() => {
-      setIsSuccess(false);
-      onConfirmTrade(market.id, side, stake, price);
-    }, 800);
+    
+    setIsSubmitting(true);
+    try {
+      const success = await onConfirmTrade(market.id, side, stake, price);
+      if (success !== false) {
+        setIsSuccess(true);
+        setTimeout(() => {
+          setIsSuccess(false);
+          onClose();
+        }, 800);
+      }
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
@@ -266,23 +257,26 @@ const TradeModal = memo(function TradeModal({ isOpen, onClose, market, initialSi
             animate={{ y: 0 }}
             exit={{ y: '100%' }}
             transition={{ type: 'spring', damping: 25, stiffness: 200 }}
-            className="fixed bottom-0 left-0 right-0 bg-black/40 backdrop-blur-3xl border-t border-white/20 rounded-t-[2.5rem] p-6 z-50 pb-safe shadow-[0_-20px_60px_rgba(0,0,0,0.8)] overflow-hidden"
+            className="fixed bottom-0 left-0 right-0 h-[95dvh] flex flex-col bg-black/40 backdrop-blur-3xl border-t border-white/20 rounded-t-[2.5rem] z-50 pb-safe shadow-[0_-20px_60px_rgba(0,0,0,0.8)] overflow-hidden"
           >
             {/* Side-specific background glow */}
             <div 
-              className={`absolute inset-0 opacity-20 transition-colors duration-500 ${side === 'YES' ? 'bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-yes/40 via-transparent to-transparent' : 'bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-no/40 via-transparent to-transparent'}`}
+              className={`absolute inset-0 opacity-20 transition-colors duration-500 pointer-events-none ${side === 'YES' ? 'bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-yes/40 via-transparent to-transparent' : 'bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-no/40 via-transparent to-transparent'}`}
             />
             
-            <div className="relative z-10">
-              <div className="w-12 h-1.5 bg-white/20 rounded-full mx-auto mb-6" />
-              
-              <div className="flex justify-between items-start mb-4">
+            {/* Header / Drag Handle (Fixed at top of modal) */}
+            <div className="relative z-20 shrink-0 pt-5 px-6 pb-2">
+              <div className="w-12 h-1.5 bg-white/20 rounded-full mx-auto mb-5" />
+              <div className="flex justify-between items-start mb-2">
                 <h2 className="text-2xl font-outfit font-bold leading-tight pr-4 drop-shadow-md">{market.question}</h2>
                 <button onClick={onClose} className="glass-button p-2 shrink-0 hover:bg-white/20 transition-colors">
                   <X size={20} />
                 </button>
               </div>
+            </div>
 
+            {/* Scrollable Content */}
+            <div className="relative z-10 overflow-y-auto px-6 pb-8 hide-scrollbar overscroll-contain flex-1">
               {/* Social Actions */}
               <div className="flex items-center gap-3 mb-6">
                 <button className="flex items-center gap-1.5 text-white/50 hover:text-white transition-colors text-sm font-medium bg-white/5 px-3 py-1.5 rounded-full border border-white/10">
@@ -303,14 +297,14 @@ const TradeModal = memo(function TradeModal({ isOpen, onClose, market, initialSi
                   className={`flex-1 py-3.5 rounded-xl font-bold transition-all flex flex-col items-center justify-center gap-1 ${side === 'YES' ? 'bg-yes text-black shadow-[0_0_20px_rgba(0,255,136,0.5)] scale-[1.02]' : 'text-white/50 hover:text-white/80 hover:bg-white/5'}`}
                 >
                   <span className="text-lg">YES</span>
-                  <span className={`text-xs ${side === 'YES' ? 'text-black/70' : 'text-white/40'}`}>{market.yesPercent}¢</span>
+                  <span className={`text-xs ${side === 'YES' ? 'text-black/70' : 'text-white/40'}`}>{Math.round(yesPercent)}¢</span>
                 </button>
                 <button
                   onClick={() => setSide('NO')}
                   className={`flex-1 py-3.5 rounded-xl font-bold transition-all flex flex-col items-center justify-center gap-1 ${side === 'NO' ? 'bg-no text-white shadow-[0_0_20px_rgba(255,51,102,0.5)] scale-[1.02]' : 'text-white/50 hover:text-white/80 hover:bg-white/5'}`}
                 >
                   <span className="text-lg">NO</span>
-                  <span className={`text-xs ${side === 'NO' ? 'text-white/70' : 'text-white/40'}`}>{market.noPercent}¢</span>
+                  <span className={`text-xs ${side === 'NO' ? 'text-white/70' : 'text-white/40'}`}>{Math.round(noPercent)}¢</span>
                 </button>
               </div>
 
@@ -410,7 +404,7 @@ const TradeModal = memo(function TradeModal({ isOpen, onClose, market, initialSi
   );
 });
 
-const CircularIndicator = memo(function CircularIndicator({ yesPercent, noPercent, flashSide, volume = 0 }: { yesPercent: number, noPercent: number, flashSide: 'YES' | 'NO' | null, volume?: number }) {
+const CircularIndicator = memo(function CircularIndicator({ yesPool, noPool, flashSide, volume = 0, resolvedState }: { yesPool: number, noPool: number, flashSide: 'YES' | 'NO' | null, volume?: number, resolvedState?: { result: 'YES' | 'NO', payout: number } }) {
   const radius = 130;
   const strokeWidth = 18;
   const normalizedRadius = radius - strokeWidth * 2;
@@ -419,9 +413,13 @@ const CircularIndicator = memo(function CircularIndicator({ yesPercent, noPercen
   const circleRef = useRef<SVGCircleElement>(null);
   const percentTextRef = useRef<HTMLSpanElement>(null);
 
-  const isYesDominant = yesPercent > noPercent;
-  const isNeutral = yesPercent === noPercent;
-  const dominantPercent = isNeutral ? 50 : (isYesDominant ? yesPercent : noPercent);
+  const { yesPrice, noPrice } = getPrices(yesPool, noPool);
+  const yesPercent = yesPrice * 100;
+  const noPercent = noPrice * 100;
+
+  const isYesDominant = resolvedState ? resolvedState.result === 'YES' : yesPercent > noPercent;
+  const isNeutral = resolvedState ? false : yesPercent === noPercent;
+  const dominantPercent = resolvedState ? 100 : (isNeutral ? 50 : (isYesDominant ? yesPercent : noPercent));
   const currentPercentRef = useRef(dominantPercent);
 
   useEffect(() => {
@@ -432,7 +430,7 @@ const CircularIndicator = memo(function CircularIndicator({ yesPercent, noPercen
       const delta = (time - lastTime) / 1000;
       lastTime = time;
 
-      const speed = 6;
+      const speed = 8;
       currentPercentRef.current += (dominantPercent - currentPercentRef.current) * speed * delta;
 
       if (circleRef.current) {
@@ -463,7 +461,7 @@ const CircularIndicator = memo(function CircularIndicator({ yesPercent, noPercen
 
   const colorVar = isNeutral ? '#888888' : (isYesDominant ? 'var(--color-yes)' : 'var(--color-no)');
   const glowColor = isNeutral ? 'rgba(136,136,136,0.4)' : (isYesDominant ? 'rgba(0,255,136,0.4)' : 'rgba(255,51,102,0.4)');
-  const pressureText = isNeutral ? 'NEUTRAL ⟷' : (isYesDominant ? 'BUY PRESSURE ↑' : 'SELL PRESSURE ↓');
+  const pressureText = resolvedState ? `RESOLVED ${resolvedState.result}` : (isNeutral ? 'NEUTRAL ⟷' : (isYesDominant ? 'BUY PRESSURE ↑' : 'SELL PRESSURE ↓'));
   const pressureColor = isNeutral ? 'text-white/50' : (isYesDominant ? 'text-yes' : 'text-no');
 
   let signal = "EARLY";
@@ -479,27 +477,18 @@ const CircularIndicator = memo(function CircularIndicator({ yesPercent, noPercen
   return (
     <div className="relative flex flex-col items-center justify-center w-full max-w-[280px] aspect-square mx-auto my-6">
       {/* Signal Badge */}
-      <motion.div
-        initial={{ opacity: 0, y: 10 }}
-        animate={{ opacity: 1, y: 0 }}
-        className={`absolute top-0 z-20 px-3 py-1 rounded-full border text-[10px] font-bold tracking-widest backdrop-blur-md shadow-lg ${signalColor}`}
-      >
+      <div className={`absolute top-0 z-20 px-3 py-1 rounded-full border text-[10px] font-bold tracking-widest backdrop-blur-md shadow-lg ${signalColor}`}>
         {signal}
-      </motion.div>
+      </div>
 
-      {/* Outer Glow Ring (Optimized: No blur, uses radial gradient) */}
-      <motion.div
-        animate={{
-          opacity: flashSide ? 0.8 : [0.15, 0.35, 0.15],
-          scale: flashSide ? 1.05 : [0.95, 1.02, 0.95],
+      {/* Outer Glow Ring */}
+      <div
+        className="absolute inset-0 rounded-full -z-10 transition-all duration-300"
+        style={{ 
+          background: `radial-gradient(circle, ${glowColor} 0%, transparent 70%)`,
+          opacity: flashSide ? 0.8 : 0.2,
+          transform: flashSide ? 'scale(1.05)' : 'scale(1)'
         }}
-        transition={{
-          duration: flashSide ? 0.3 : 3,
-          repeat: flashSide ? 0 : Infinity,
-          ease: "easeInOut"
-        }}
-        className="absolute inset-0 rounded-full -z-10"
-        style={{ background: `radial-gradient(circle, ${glowColor} 0%, transparent 70%)` }}
       />
 
       <svg
@@ -510,9 +499,7 @@ const CircularIndicator = memo(function CircularIndicator({ yesPercent, noPercen
         <defs>
           <linearGradient id="ring-grad" x1="0%" y1="0%" x2="100%" y2="100%">
             <stop offset="0%" stopColor={colorVar} stopOpacity="1" />
-            <stop offset="100%" stopColor={colorVar} stopOpacity="0.3">
-              <animate attributeName="stop-opacity" values="0.3;0.8;0.3" dur="3s" repeatCount="indefinite" />
-            </stop>
+            <stop offset="100%" stopColor={colorVar} stopOpacity="0.3" />
           </linearGradient>
         </defs>
 
@@ -543,10 +530,9 @@ const CircularIndicator = memo(function CircularIndicator({ yesPercent, noPercen
 
       {/* Center Content */}
       <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none mt-4">
-        <motion.div
-          animate={{ scale: flashSide ? 1.05 : 1 }}
-          transition={{ type: "spring", stiffness: 300, damping: 15 }}
-          className="flex flex-col items-center"
+        <div
+          className="flex flex-col items-center transition-transform duration-300"
+          style={{ transform: flashSide ? 'scale(1.05)' : 'scale(1)' }}
         >
           <span
             ref={percentTextRef}
@@ -563,19 +549,41 @@ const CircularIndicator = memo(function CircularIndicator({ yesPercent, noPercen
           <span className="mt-2 text-[11px] font-medium text-white/60 bg-black/40 px-2.5 py-1 rounded-full border border-white/10 backdrop-blur-sm">
             {formatCurrency(volume)} Vol
           </span>
-        </motion.div>
+        </div>
       </div>
     </div>
   );
 });
 
-const FeedItem = memo(function FeedItem({ market, isActive, onTrade, position, liveUpdate, onOpenTrader, onCopyTrade }: { market: typeof MARKETS[0], isActive: boolean, onTrade: (market: typeof MARKETS[0], side: 'YES' | 'NO') => void, position?: { side: 'YES' | 'NO', amount: number, price: number }, liveUpdate?: { yesPercent: number, noPercent: number, volume: number, participants: number, flashSide: 'YES' | 'NO' | null, newActivity?: any }, onOpenTrader: (trader: any) => void, onCopyTrade: (market: typeof MARKETS[0], side: 'YES' | 'NO', amount: number) => void }) {
+const FeedItem = memo(function FeedItem({ market, isActive, onTrade, position, onOpenTrader, onCopyTrade, resolvedState }: { market: Market, isActive: boolean, onTrade: (market: Market, side: 'YES' | 'NO') => void, position?: { side: 'YES' | 'NO', amount: number, price: number }, onOpenTrader: (trader: any) => void, onCopyTrade: (market: Market, side: 'YES' | 'NO', amount: number) => void, resolvedState?: { result: 'YES' | 'NO', payout: number } }) {
   
-  const currentYes = liveUpdate?.yesPercent ?? market.yesPercent;
-  const currentNo = liveUpdate?.noPercent ?? market.noPercent;
-  const currentVolume = liveUpdate?.volume ?? market.volume;
-  const currentParticipants = liveUpdate?.participants ?? market.participants;
-  const flashSide = liveUpdate?.flashSide ?? null;
+  const currentYesPool = market.yesPool;
+  const currentNoPool = market.noPool;
+  const currentVolume = market.volume;
+  const currentParticipants = market.participants;
+  
+  const [flashSide, setFlashSide] = useState<'YES' | 'NO' | null>(null);
+  const prevYesPool = useRef(currentYesPool);
+  const prevNoPool = useRef(currentNoPool);
+
+  useEffect(() => {
+    if (currentYesPool > prevYesPool.current) {
+      setTimeout(() => setFlashSide('YES'), 0);
+      const timer = setTimeout(() => setFlashSide(null), 500);
+      prevYesPool.current = currentYesPool;
+      return () => clearTimeout(timer);
+    }
+    if (currentNoPool > prevNoPool.current) {
+      setTimeout(() => setFlashSide('NO'), 0);
+      const timer = setTimeout(() => setFlashSide(null), 500);
+      prevNoPool.current = currentNoPool;
+      return () => clearTimeout(timer);
+    }
+  }, [currentYesPool, currentNoPool]);
+
+  const { yesPrice, noPrice } = getPrices(currentYesPool, currentNoPool);
+  const currentYes = yesPrice * 100;
+  const currentNo = noPrice * 100;
   
   const [activities, setActivities] = useState(market.recentActivity);
 
@@ -583,7 +591,7 @@ const FeedItem = memo(function FeedItem({ market, isActive, onTrade, position, l
   // The new activities are shown as floating toasts instead.
 
   return (
-    <div className="w-full h-[100dvh] snap-start snap-always flex flex-col relative pb-24 pt-safe">
+    <div className={`w-full h-[100dvh] snap-start snap-always flex flex-col relative pb-24 pt-safe transition-opacity duration-1000 ${resolvedState ? 'opacity-50' : 'opacity-100'}`}>
       {/* Background subtle gradient based on dominance (Optimized) */}
       <motion.div 
         animate={{ opacity: flashSide ? 0.15 : 0 }}
@@ -593,6 +601,23 @@ const FeedItem = memo(function FeedItem({ market, isActive, onTrade, position, l
       <div 
         className={`absolute inset-0 opacity-10 bg-gradient-to-b ${currentYes > 50 ? 'from-yes/20 to-transparent' : 'from-no/20 to-transparent'} pointer-events-none`}
       />
+
+      {/* Resolved Overlay */}
+      <AnimatePresence>
+        {resolvedState && (
+          <motion.div 
+            initial={{ opacity: 0, scale: 0.8 }}
+            animate={{ opacity: 1, scale: 1 }}
+            className="absolute inset-0 z-30 flex items-center justify-center pointer-events-none"
+          >
+            <div className={`px-8 py-4 rounded-2xl backdrop-blur-xl border-2 font-outfit font-bold text-3xl shadow-2xl ${
+              resolvedState.result === 'YES' ? 'bg-yes/20 border-yes text-yes shadow-[0_0_50px_rgba(0,255,136,0.3)]' : 'bg-no/20 border-no text-no shadow-[0_0_50px_rgba(255,51,102,0.3)]'
+            }`}>
+              RESOLVED {resolvedState.result}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Center: Question & Indicator */}
       <div className="flex-1 flex flex-col items-center justify-center px-6 z-10">
@@ -606,13 +631,14 @@ const FeedItem = memo(function FeedItem({ market, isActive, onTrade, position, l
         </motion.h1>
         
         <motion.button
-          onClick={() => onTrade(market, 'YES')}
+          onClick={() => !resolvedState && onTrade(market, 'YES')}
+          disabled={!!resolvedState}
           initial={{ scale: 0.8, opacity: 0 }}
           animate={{ scale: isActive ? 1 : 0.8, opacity: isActive ? 1 : 0 }}
-          whileHover={{ scale: 1.05 }}
-          whileTap={{ scale: 0.95 }}
+          whileHover={{ scale: resolvedState ? 1 : 1.05 }}
+          whileTap={{ scale: resolvedState ? 1 : 0.95 }}
           transition={{ type: 'spring', damping: 20, stiffness: 100, delay: 0.3 }}
-          className="w-full relative cursor-pointer group"
+          className={`w-full relative group ${resolvedState ? 'cursor-default' : 'cursor-pointer'}`}
         >
           {position && (
             <motion.div 
@@ -622,7 +648,7 @@ const FeedItem = memo(function FeedItem({ market, isActive, onTrade, position, l
               style={{ background: `radial-gradient(circle, ${position.side === 'YES' ? 'rgba(0,255,136,0.3)' : 'rgba(255,51,102,0.3)'} 0%, transparent 70%)` }}
             />
           )}
-          <CircularIndicator yesPercent={currentYes} noPercent={currentNo} flashSide={flashSide} volume={currentVolume} />
+          <CircularIndicator yesPool={currentYesPool} noPool={currentNoPool} flashSide={flashSide} volume={currentVolume} resolvedState={resolvedState} />
           
           {/* Tap to Trade Hint */}
           <div className="absolute -bottom-8 left-1/2 -translate-x-1/2 opacity-0 group-hover:opacity-100 transition-opacity duration-300">
@@ -729,14 +755,20 @@ const FeedItem = memo(function FeedItem({ market, isActive, onTrade, position, l
 });
 
 // --- Views ---
-const PortfolioView = memo(function PortfolioView({ positions, markets }: { positions: Record<string, { side: 'YES' | 'NO', amount: number, price: number }>, markets: typeof MARKETS }) {
+const PortfolioView = memo(function PortfolioView({ positions, markets, resolvedMarkets, userBalance }: { positions: Record<string, { side: 'YES' | 'NO', amount: number, price: number }>, markets: Market[], resolvedMarkets: Record<string, { result: 'YES' | 'NO', payout: number }>, userBalance: number }) {
   const totalInvested = Object.values(positions).reduce((acc, pos) => acc + pos.amount, 0);
   
   // Calculate total current value
   const totalCurrentValue = Object.entries(positions).reduce((acc, [marketId, pos]) => {
     const market = markets.find(m => m.id === marketId);
     if (!market) return acc;
-    const currentPrice = pos.side === 'YES' ? market.yesPercent : market.noPercent;
+    
+    if (resolvedMarkets[marketId]) {
+      return acc + resolvedMarkets[marketId].payout;
+    }
+
+    const { yesPrice, noPrice } = getPrices(market.yesPool, market.noPool);
+    const currentPrice = pos.side === 'YES' ? yesPrice * 100 : noPrice * 100;
     const shares = Math.floor((pos.amount / pos.price) * 100);
     return acc + ((shares * currentPrice) / 100);
   }, 0);
@@ -744,7 +776,7 @@ const PortfolioView = memo(function PortfolioView({ positions, markets }: { posi
   const totalPnl = totalCurrentValue - totalInvested;
   const totalPnlPercent = totalInvested > 0 ? (totalPnl / totalInvested) * 100 : 0;
   const isPositive = totalPnl >= 0;
-  const balance = 1240.50 - totalInvested + totalPnl;
+  const balance = userBalance + totalCurrentValue;
 
   // Mock graph data (starts at 1000, ends at current balance)
   const graphData = [1000, 1050, 1020, 1150, 1100, 1200, balance];
@@ -818,9 +850,16 @@ const PortfolioView = memo(function PortfolioView({ positions, markets }: { posi
             {Object.entries(positions).map(([marketId, pos]) => {
               const market = markets.find(m => m.id === marketId);
               if (!market) return null;
-              const currentPrice = pos.side === 'YES' ? market.yesPercent : market.noPercent;
+              
+              const isResolved = !!resolvedMarkets[marketId];
+              const resolvedData = resolvedMarkets[marketId];
+
+              const { yesPrice, noPrice } = getPrices(market.yesPool, market.noPool);
+              const currentPrice = isResolved 
+                ? (resolvedData.result === pos.side ? 100 : 0)
+                : (pos.side === 'YES' ? yesPrice * 100 : noPrice * 100);
               const shares = Math.floor((pos.amount / pos.price) * 100);
-              const currentValue = (shares * currentPrice) / 100;
+              const currentValue = isResolved ? resolvedData.payout : (shares * currentPrice) / 100;
               const pnl = currentValue - pos.amount;
               const pnlPercent = ((pnl / pos.amount) * 100);
               const isPosProfit = pnl >= 0;
@@ -829,9 +868,20 @@ const PortfolioView = memo(function PortfolioView({ positions, markets }: { posi
                 <motion.div 
                   key={marketId} 
                   whileTap={{ scale: 0.98 }}
-                  className={`glass-panel p-4 border transition-colors duration-500 cursor-pointer ${isPosProfit ? 'border-yes/20 bg-yes/5 shadow-[0_0_15px_rgba(0,255,136,0.05)]' : 'border-no/20 bg-no/5 shadow-[0_0_15px_rgba(255,51,102,0.05)]'}`}
+                  className={`glass-panel p-4 border transition-colors duration-500 cursor-pointer ${
+                    isResolved 
+                      ? isPosProfit ? 'border-yes/50 bg-yes/10 shadow-[0_0_20px_rgba(0,255,136,0.1)]' : 'border-no/50 bg-no/10 shadow-[0_0_20px_rgba(255,51,102,0.1)]'
+                      : isPosProfit ? 'border-yes/20 bg-yes/5 shadow-[0_0_15px_rgba(0,255,136,0.05)]' : 'border-no/20 bg-no/5 shadow-[0_0_15px_rgba(255,51,102,0.05)]'
+                  }`}
                 >
-                  <p className="font-semibold mb-3 text-sm line-clamp-2 pr-4">{market.question}</p>
+                  <div className="flex justify-between items-start mb-3">
+                    <p className="font-semibold text-sm line-clamp-2 pr-4">{market.question}</p>
+                    {isResolved && (
+                      <span className={`text-[10px] font-bold px-2 py-1 rounded-full whitespace-nowrap ${isPosProfit ? 'bg-yes text-black' : 'bg-no text-white'}`}>
+                        RESOLVED {resolvedData.result}
+                      </span>
+                    )}
+                  </div>
                   <div className="flex justify-between items-end">
                     <div>
                       <div className="flex items-center gap-2 mb-2">
@@ -843,7 +893,9 @@ const PortfolioView = memo(function PortfolioView({ positions, markets }: { posi
                       <p className="text-white/50 text-[11px]">{shares} shares • ${pos.amount} invested</p>
                     </div>
                     <div className="text-right">
-                      <p className="text-[11px] text-white/50 mb-1">Current: <span className="text-white font-bold">{currentPrice}¢</span></p>
+                      <p className="text-[11px] text-white/50 mb-1">
+                        {isResolved ? 'Payout:' : 'Current:'} <span className="text-white font-bold">{isResolved ? `$${currentValue}` : `${currentPrice}¢`}</span>
+                      </p>
                       <p className="font-outfit font-bold text-lg">
                         $<AnimatedNumber value={currentValue} decimals={2} />
                       </p>
@@ -899,24 +951,38 @@ const PortfolioView = memo(function PortfolioView({ positions, markets }: { posi
   );
 });
 
-const MarketsView = memo(function MarketsView({ onTrade, markets }: { onTrade: (market: typeof MARKETS[0], side: 'YES' | 'NO') => void, markets: typeof MARKETS }) {
+const MarketsView = memo(function MarketsView({ onTrade, markets, resolvedMarkets }: { onTrade: (market: Market, side: 'YES' | 'NO') => void, markets: Market[], resolvedMarkets: Record<string, { result: 'YES' | 'NO', payout: number }> }) {
   return (
     <div className="h-full w-full overflow-y-auto pt-safe pb-24 px-6">
       <h2 className="text-3xl font-outfit font-bold mt-8 mb-6">Explore Markets</h2>
       <div className="space-y-4">
-        {markets.map(market => (
-          <div key={market.id} className="glass-panel p-4">
-            <div className="flex items-center gap-2 mb-3">
-              <Image src={market.creator.avatar} alt="" width={20} height={20} className="rounded-full border border-white/10" />
-              <span className="text-xs text-white/50">{market.creator.name}</span>
+        {markets.map(market => {
+          const isResolved = !!resolvedMarkets[market.id];
+          const resolvedData = resolvedMarkets[market.id];
+          const { yesPrice, noPrice } = getPrices(market.yesPool, market.noPool);
+          const yesPercent = yesPrice * 100;
+          const noPercent = noPrice * 100;
+          return (
+            <div key={market.id} className={`glass-panel p-4 relative overflow-hidden ${isResolved ? 'opacity-70' : ''}`}>
+              {isResolved && (
+                <div className="absolute inset-0 z-0 bg-black/40 backdrop-blur-[2px] flex items-center justify-center pointer-events-none">
+                  <span className={`px-4 py-1 rounded-full font-bold text-sm border ${resolvedData.result === 'YES' ? 'bg-yes/20 text-yes border-yes' : 'bg-no/20 text-no border-no'}`}>
+                    RESOLVED {resolvedData.result}
+                  </span>
+                </div>
+              )}
+              <div className="flex items-center gap-2 mb-3 relative z-10">
+                <Image src={market.creator.avatar} alt="" width={20} height={20} className="rounded-full border border-white/10" />
+                <span className="text-xs text-white/50">{market.creator.name}</span>
+              </div>
+              <h3 className="font-semibold mb-4 relative z-10">{market.question}</h3>
+              <div className="flex gap-2 relative z-10">
+                <button disabled={isResolved} onClick={() => onTrade(market, 'YES')} className={`flex-1 py-2 rounded-lg font-bold text-sm transition-colors ${isResolved ? 'bg-yes/5 text-yes/50 cursor-default' : 'bg-yes/10 hover:bg-yes/20 text-yes'}`}>YES {Math.round(yesPercent)}¢</button>
+                <button disabled={isResolved} onClick={() => onTrade(market, 'NO')} className={`flex-1 py-2 rounded-lg font-bold text-sm transition-colors ${isResolved ? 'bg-no/5 text-no/50 cursor-default' : 'bg-no/10 hover:bg-no/20 text-no'}`}>NO {Math.round(noPercent)}¢</button>
+              </div>
             </div>
-            <h3 className="font-semibold mb-4">{market.question}</h3>
-            <div className="flex gap-2">
-              <button onClick={() => onTrade(market, 'YES')} className="flex-1 bg-yes/10 hover:bg-yes/20 text-yes py-2 rounded-lg font-bold text-sm transition-colors">YES {market.yesPercent}¢</button>
-              <button onClick={() => onTrade(market, 'NO')} className="flex-1 bg-no/10 hover:bg-no/20 text-no py-2 rounded-lg font-bold text-sm transition-colors">NO {market.noPercent}¢</button>
-            </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
     </div>
   );
@@ -935,7 +1001,16 @@ const CreateView = memo(function CreateView() {
   );
 });
 
-const ProfileView = memo(function ProfileView() {
+const ProfileView = memo(function ProfileView({ userBalance }: { userBalance: number }) {
+  const [copied, setCopied] = useState(false);
+  const referralCode = "PREDIX_0x1";
+  
+  const handleCopy = useCallback(() => {
+    navigator.clipboard.writeText(`https://predix.app/?ref=${referralCode}`);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  }, []);
+
   return (
     <div className="h-full w-full overflow-y-auto pt-safe pb-24 px-6">
       <div className="flex flex-col items-center mt-12 mb-8">
@@ -943,6 +1018,58 @@ const ProfileView = memo(function ProfileView() {
         <h2 className="text-2xl font-outfit font-bold">Trader_0x1</h2>
         <p className="text-white/50 text-sm">Joined March 2026</p>
       </div>
+      
+      <div className="glass-panel p-4 text-center mb-8">
+        <p className="text-white/50 text-xs mb-1">Available Balance</p>
+        <p className="text-3xl font-outfit font-bold text-primary text-glow-primary">${userBalance.toFixed(2)}</p>
+      </div>
+
+      {/* Referral Dashboard */}
+      <div className="glass-panel p-5 mb-8 border border-yellow-500/30 shadow-[0_0_30px_rgba(255,215,0,0.1)] relative overflow-hidden">
+        <div className="absolute top-0 right-0 w-32 h-32 bg-yellow-500/10 rounded-full blur-3xl -mr-10 -mt-10 pointer-events-none" />
+        <h3 className="font-outfit font-bold text-lg mb-1 text-yellow-400">Invite & Earn</h3>
+        <p className="text-white/60 text-xs mb-4">Get 50% of trading fees from your friends.</p>
+        
+        <div className="flex justify-between items-center mb-4 relative z-10">
+          <div>
+            <p className="text-white/50 text-[10px] uppercase tracking-wider">Total Referrals</p>
+            <p className="font-bold text-xl">12</p>
+          </div>
+          <div className="text-right">
+            <p className="text-white/50 text-[10px] uppercase tracking-wider">Earnings</p>
+            <p className="font-bold text-xl text-yellow-400" style={{ textShadow: '0 0 10px rgba(255,215,0,0.5)' }}>$340.50</p>
+          </div>
+        </div>
+
+        <button 
+          onClick={handleCopy}
+          className="w-full py-3 rounded-xl font-bold text-sm bg-yellow-500/20 text-yellow-400 border border-yellow-500/50 hover:bg-yellow-500/30 transition-colors flex items-center justify-center gap-2 relative z-10"
+        >
+          {copied ? <Check size={16} /> : <Copy size={16} />}
+          {copied ? 'Copied!' : 'Copy Referral Link'}
+        </button>
+      </div>
+
+      {/* Leaderboard Preview */}
+      <div className="glass-panel p-4 mb-8">
+        <h3 className="font-outfit font-bold mb-4 flex items-center gap-2"><Trophy size={16} className="text-yellow-400"/> Top Traders</h3>
+        <div className="space-y-3">
+          {[
+            { rank: 1, name: 'CryptoKing', profit: '+$45,200', isMe: false },
+            { rank: 2, name: 'WhaleAlert', profit: '+$32,100', isMe: false },
+            { rank: 3, name: 'Trader_0x1', profit: '+$1,240', isMe: true },
+          ].map(user => (
+            <div key={user.rank} className={`flex items-center justify-between p-2 rounded-lg ${user.isMe ? 'bg-white/10 border border-white/20' : ''}`}>
+              <div className="flex items-center gap-3">
+                <span className={`font-bold text-sm ${user.rank === 1 ? 'text-yellow-400' : user.rank === 2 ? 'text-gray-300' : 'text-amber-600'}`}>#{user.rank}</span>
+                <span className="font-semibold text-sm">{user.name} {user.isMe && '(You)'}</span>
+              </div>
+              <span className="text-yes font-bold text-sm">{user.profit}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+
       <div className="grid grid-cols-2 gap-4 mb-8">
         <div className="glass-panel p-4 text-center">
           <p className="text-white/50 text-xs mb-1">Win Rate</p>
@@ -953,6 +1080,7 @@ const ProfileView = memo(function ProfileView() {
           <p className="text-2xl font-outfit font-bold">0</p>
         </div>
       </div>
+      
       <div className="glass-panel p-4">
         <h3 className="font-semibold mb-4">Settings</h3>
         <div className="space-y-4 text-sm text-white/70">
@@ -1093,6 +1221,120 @@ const TraderProfileModal = memo(function TraderProfileModal({ isOpen, onClose, t
   );
 });
 
+const BonusPopup = memo(function BonusPopup({ isOpen, onClose, amount }: { isOpen: boolean, onClose: () => void, amount: number }) {
+  return (
+    <AnimatePresence>
+      {isOpen && (
+        <>
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[60]"
+          />
+          <motion.div
+            initial={{ opacity: 0, scale: 0.8, y: 50 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            exit={{ opacity: 0, scale: 0.8, y: 50 }}
+            className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[85%] max-w-sm bg-[#1A1B23] border border-yellow-500/30 rounded-3xl p-6 z-[60] shadow-[0_0_60px_rgba(255,215,0,0.2)] text-center overflow-hidden"
+          >
+            <div className="absolute top-0 left-1/2 -translate-x-1/2 w-full h-32 bg-yellow-500/20 blur-[50px] pointer-events-none" />
+            
+            <div className="w-20 h-20 bg-yellow-500/20 rounded-full flex items-center justify-center mx-auto mb-4 shadow-[0_0_30px_rgba(255,215,0,0.4)] relative z-10">
+              <Gift size={40} className="text-yellow-400" />
+            </div>
+            
+            <h2 className="text-2xl font-outfit font-bold mb-2 text-white relative z-10">Welcome Bonus! 🎉</h2>
+            <p className="text-white/70 text-sm mb-6 relative z-10">
+              You received <span className="text-yellow-400 font-bold">${amount}</span> for joining via a referral link.
+            </p>
+            
+            <button 
+              onClick={onClose}
+              className="w-full py-3 rounded-xl font-bold text-sm bg-yellow-500 text-black hover:bg-yellow-400 transition-colors shadow-[0_0_20px_rgba(255,215,0,0.4)] relative z-10"
+            >
+              Start Trading
+            </button>
+          </motion.div>
+        </>
+      )}
+    </AnimatePresence>
+  );
+});
+
+const ShareModal = memo(function ShareModal({ data, onClose }: { data: { type: 'TRADE' | 'WIN', amount: number, marketQuestion: string } | null, onClose: () => void }) {
+  const [copied, setCopied] = useState(false);
+  
+  const handleCopy = useCallback(() => {
+    const text = data?.type === 'WIN' 
+      ? `I just made +$${data.amount.toFixed(2)} on Predix! 🚀\nJoin me: https://predix.app/?ref=PREDIX_0x1`
+      : `I'm predicting to make +$${data?.amount.toFixed(2)} on Predix! 🚀\nJoin me: https://predix.app/?ref=PREDIX_0x1`;
+      
+    navigator.clipboard.writeText(text);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  }, [data]);
+
+  return (
+    <AnimatePresence>
+      {data && (
+        <>
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            onClick={onClose}
+            className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[60]"
+          />
+          <motion.div
+            initial={{ opacity: 0, scale: 0.9, y: 20 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            exit={{ opacity: 0, scale: 0.9, y: 20 }}
+            className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[90%] max-w-sm bg-[#1A1B23] border border-yes/30 rounded-3xl p-6 z-[60] shadow-[0_0_50px_rgba(0,255,136,0.15)]"
+          >
+            <div className="text-center mb-6">
+              <div className="w-16 h-16 bg-yes/20 rounded-full flex items-center justify-center mx-auto mb-4 shadow-[0_0_30px_rgba(0,255,136,0.3)]">
+                <Rocket size={32} className="text-yes" />
+              </div>
+              <h2 className="text-2xl font-outfit font-bold mb-2">
+                {data.type === 'WIN' ? 'You Won! 🎉' : 'Trade Placed! 🚀'}
+              </h2>
+              <p className="text-white/70 text-sm line-clamp-2">
+                {data.marketQuestion}
+              </p>
+            </div>
+
+            <div className="glass-panel p-4 mb-6 text-center border-yes/30 bg-yes/5">
+              <p className="text-xs text-white/50 mb-1">
+                {data.type === 'WIN' ? 'Profit Made' : 'Potential Profit'}
+              </p>
+              <p className="text-4xl font-outfit font-bold text-yes text-glow-yes">
+                +${data.amount.toFixed(2)}
+              </p>
+            </div>
+
+            <div className="space-y-3">
+              <button 
+                onClick={handleCopy}
+                className="w-full py-3 rounded-xl font-bold text-sm bg-primary text-white hover:bg-primary/90 transition-colors flex items-center justify-center gap-2 shadow-[0_0_20px_rgba(123,97,255,0.4)]"
+              >
+                {copied ? <Check size={18} /> : <Share2 size={18} />}
+                {copied ? 'Copied to Clipboard!' : 'Share & Earn Bonus'}
+              </button>
+              <button 
+                onClick={onClose}
+                className="w-full py-3 rounded-xl font-bold text-sm bg-white/5 text-white hover:bg-white/10 transition-colors"
+              >
+                Done
+              </button>
+            </div>
+          </motion.div>
+        </>
+      )}
+    </AnimatePresence>
+  );
+});
+
 const TimeAgo = memo(function TimeAgo({ time }: { time: number }) {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
@@ -1139,7 +1381,7 @@ const UrgencyIndicator = memo(function UrgencyIndicator({ time, id }: { time: nu
   );
 });
 
-const FollowingFeedItem = memo(function FollowingFeedItem({ activityGroup, onOpenTrader, onCopyTrade }: { activityGroup: any, onOpenTrader: (trader: any) => void, onCopyTrade: (market: typeof MARKETS[0], side: 'YES'|'NO', amount: number) => void }) {
+const FollowingFeedItem = memo(function FollowingFeedItem({ activityGroup, onOpenTrader, onCopyTrade }: { activityGroup: any, onOpenTrader: (trader: any) => void, onCopyTrade: (market: Market, side: 'YES'|'NO', amount: number) => void }) {
   const [now, setNow] = useState(() => Date.now());
   
   useEffect(() => {
@@ -1237,9 +1479,9 @@ const FollowingFeedItem = memo(function FollowingFeedItem({ activityGroup, onOpe
   );
 });
 
-const FollowingFeed = memo(function FollowingFeed({ activities, onOpenTrader, onCopyTrade }: { activities: any[], onOpenTrader: (trader: any) => void, onCopyTrade: (market: typeof MARKETS[0], side: 'YES'|'NO', amount: number) => void }) {
+const FollowingFeed = memo(function FollowingFeed({ activities, onOpenTrader, onCopyTrade }: { activities: any[], onOpenTrader: (trader: any) => void, onCopyTrade: (market: Market, side: 'YES'|'NO', amount: number) => void }) {
   return (
-    <div className="h-full w-full overflow-y-auto pt-24 pb-24 px-4 space-y-4 hide-scrollbar">
+    <div className="h-full w-full overflow-y-auto pt-24 pb-24 px-4 hide-scrollbar">
       {activities.length === 0 ? (
         <div className="flex flex-col items-center justify-center h-full text-white/50">
           <User size={48} className="mb-4 opacity-50" />
@@ -1247,14 +1489,16 @@ const FollowingFeed = memo(function FollowingFeed({ activities, onOpenTrader, on
           <p className="text-sm">Follow traders to see their trades here.</p>
         </div>
       ) : (
-        activities.map(activityGroup => (
-          <FollowingFeedItem 
-            key={activityGroup.id} 
-            activityGroup={activityGroup} 
-            onOpenTrader={onOpenTrader} 
-            onCopyTrade={onCopyTrade} 
-          />
-        ))
+        <div className="grid grid-cols-2 gap-3">
+          {activities.map(activityGroup => (
+            <FollowingFeedItem 
+              key={activityGroup.id} 
+              activityGroup={activityGroup} 
+              onOpenTrader={onOpenTrader} 
+              onCopyTrade={onCopyTrade} 
+            />
+          ))}
+        </div>
       )}
     </div>
   );
@@ -1283,12 +1527,40 @@ const LiveToasts = memo(function LiveToasts({ toasts }: { toasts: any[] }) {
   );
 });
 
+function useTradeEngine() {
+  const isTradingRef = useRef(false);
+
+  const placeTrade = useCallback(async (marketId: string, side: 'YES' | 'NO', amount: number) => {
+    if (isTradingRef.current) return { success: false, error: 'Trade in progress' };
+    
+    isTradingRef.current = true;
+    try {
+      // Simulate Supabase RPC place_trade
+      await new Promise(resolve => setTimeout(resolve, 600)); // Simulate network latency
+      
+      // Here you would normally call:
+      // const { data, error } = await supabase.rpc('place_trade', { p_market_id: marketId, p_side: side, p_amount: amount });
+      // if (error) throw error;
+      
+      return { success: true };
+    } catch (error: any) {
+      console.error('Trade failed:', error);
+      return { success: false, error: error.message || 'Trade failed' };
+    } finally {
+      isTradingRef.current = false;
+    }
+  }, []);
+
+  return { placeTrade };
+}
+
 export default function Page() {
+  const { placeTrade } = useTradeEngine();
   const [activeTab, setActiveTab] = useState('home');
   const [feedType, setFeedType] = useState<'foryou' | 'following'>('foryou');
   const [activeIndex, setActiveIndex] = useState(0);
   const [tradeModalOpen, setTradeModalOpen] = useState(false);
-  const [selectedMarket, setSelectedMarket] = useState<typeof MARKETS[0] | null>(null);
+  const [selectedMarket, setSelectedMarket] = useState<Market | null>(null);
   const [tradeSide, setTradeSide] = useState<'YES' | 'NO'>('YES');
   const [tradeStake, setTradeStake] = useState<number>(50);
   const [selectedTrader, setSelectedTrader] = useState<any | null>(null);
@@ -1296,15 +1568,8 @@ export default function Page() {
   const [toast, setToast] = useState<{ visible: boolean, side: 'YES' | 'NO', amount: number, price: number } | null>(null);
   const [liveToasts, setLiveToasts] = useState<any[]>([]);
   
-  const [markets, setMarkets] = useState(MARKETS);
-
-  const updateMarket = useCallback((id: string, data: Partial<typeof MARKETS[0]>) => {
-    setMarkets(prev =>
-      prev.map(m =>
-        m.id === id ? { ...m, ...data } : m
-      )
-    )
-  }, []);
+  const { getMarkets, version, recentTrades, updateMarket } = useRealtimeMarkets(MARKETS);
+  const markets = getMarkets();
 
   const [followedTraders, setFollowedTraders] = useState<string[]>(['CryptoWhale', 'TechInsider']);
   const [followingActivities, setFollowingActivities] = useState<any[]>(() => [
@@ -1341,137 +1606,52 @@ export default function Page() {
     );
   }, [selectedTrader]);
   
-  // Live market state simulation
-  const [liveUpdates, setLiveUpdates] = useState<Record<string, { yesPercent: number, noPercent: number, volume: number, participants: number, flashSide: 'YES' | 'NO' | null, newActivity?: any }>>({});
-  
   const containerRef = useRef<HTMLDivElement>(null);
 
-  const rafRef = useRef<number | null>(null);
-  const lastUpdateRef = useRef(0);
-
-  const updateVisibleMarketsOnly = useCallback(() => {
-    const now = Date.now();
-    if (now - lastUpdateRef.current > 800) {
-      lastUpdateRef.current = now;
-      
-      const randomMarketId = markets[Math.floor(Math.random() * markets.length)].id;
-      const isYes = Math.random() > 0.5;
-      const side = isYes ? 'YES' : 'NO';
-      const amount = Math.floor(Math.random() * 500) + 10;
-      const newParticipant = Math.random() > 0.7 ? 1 : 0;
-      
-      const isFollowedTraderActivity = Math.random() > 0.8 && followedTraders.length > 0;
-      const activityUser = isFollowedTraderActivity 
-        ? followedTraders[Math.floor(Math.random() * followedTraders.length)]
-        : `User${Math.floor(Math.random() * 9999)}`;
-      
-      const activityAvatar = isFollowedTraderActivity 
-        ? `https://picsum.photos/seed/${activityUser.toLowerCase()}/32/32`
-        : `https://picsum.photos/seed/${Math.random()}/32/32`;
-        
-      const activityLevel = isFollowedTraderActivity ? Math.floor(Math.random() * 20) + 80 : Math.floor(Math.random() * 100) + 1;
-      const activityAccuracy = isFollowedTraderActivity ? Math.floor(Math.random() * 20) + 70 : Math.floor(Math.random() * 40) + 50;
-      const activityBadge = isFollowedTraderActivity ? TRADER_BADGES[Math.floor(Math.random() * 3)] : (Math.random() > 0.8 ? TRADER_BADGES[Math.floor(Math.random() * TRADER_BADGES.length)] : null);
-
-      const newActivity = {
-        id: `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`,
-        user: activityUser,
-        avatar: activityAvatar,
-        action: `bought $${amount} ${side}`,
-        side: side,
-        amount: amount,
-        level: activityLevel,
-        accuracy: activityAccuracy,
-        badge: activityBadge
-      };
-
-      setLiveUpdates(prev => {
-        const marketData = markets.find(m => m.id === randomMarketId);
-        const current = prev[randomMarketId] || { 
-          yesPercent: marketData?.yesPercent || 50,
-          noPercent: marketData?.noPercent || 50,
-          volume: marketData?.volume || 0,
-          participants: marketData?.participants || 0
-        };
-        
-        // Slight price movement (0.1 to 1.5%)
-        const shift = (Math.random() * 1.5) + 0.1;
-        let newYes = isYes ? current.yesPercent + shift : current.yesPercent - shift;
-        // Clamp between 1 and 99
-        newYes = Math.max(1, Math.min(99, newYes));
-        const newNo = 100 - newYes;
-
-        return {
-          ...prev,
-          [randomMarketId]: {
-            yesPercent: newYes,
-            noPercent: newNo,
-            volume: current.volume + amount,
-            participants: current.participants + newParticipant,
-            flashSide: side,
-            newActivity: newActivity
-          }
-        };
-      });
-
-      if (isFollowedTraderActivity) {
-        setLiveToasts(prev => {
-          const next = [...prev, newActivity];
-          if (next.length > 3) return next.slice(next.length - 3);
-          return next;
-        });
-        
-        setTimeout(() => {
-          setLiveToasts(prev => prev.filter(t => t.id !== newActivity.id));
-        }, 3000);
-
-        setFollowingActivities(prev => {
-          const existingGroupIndex = prev.findIndex(g => g.user === activityUser);
-          const newTrade = { id: `${Date.now()}-${Math.random()}`, marketId: randomMarketId, side, amount, time: Date.now() };
-          
-          if (existingGroupIndex >= 0) {
-            const newGroups = [...prev];
-            newGroups[existingGroupIndex] = {
-              ...newGroups[existingGroupIndex],
-              trades: [newTrade, ...newGroups[existingGroupIndex].trades].slice(0, 5) // keep last 5 trades
-            };
-            return newGroups; // Do not reorder to prevent scroll jumps
-          } else {
-            return [...prev, {
-              id: `f-${Date.now()}`,
-              user: activityUser,
-              avatar: activityAvatar,
-              level: activityLevel,
-              accuracy: activityAccuracy,
-              badge: activityBadge,
-              trades: [newTrade]
-            }].slice(-20); // keep last 20 groups
-          }
-        });
-      }
-
-      // Clear flash after a short delay
-      setTimeout(() => {
-        setLiveUpdates(prev => ({
-          ...prev,
-          [randomMarketId]: { ...prev[randomMarketId], flashSide: null }
-        }));
-      }, 300);
-    }
-  }, [markets, followedTraders]);
-
+  // Sync recentTrades to followingActivities and liveToasts
   useEffect(() => {
-    const loop = () => {
-      updateVisibleMarketsOnly();
-      rafRef.current = requestAnimationFrame(loop);
-    };
+    if (recentTrades.length === 0) return;
+    
+    const latestTrade = recentTrades[0];
+    
+    // Add to live toasts
+    setTimeout(() => {
+      setLiveToasts(prev => {
+        const next = [...prev, latestTrade];
+        if (next.length > 3) return next.slice(next.length - 3);
+        return next;
+      });
+      
+      setTimeout(() => {
+        setLiveToasts(prev => prev.filter(t => t.id !== latestTrade.id));
+      }, 3000);
 
-    rafRef.current = requestAnimationFrame(loop);
-
-    return () => {
-      if (rafRef.current) cancelAnimationFrame(rafRef.current);
-    };
-  }, [updateVisibleMarketsOnly]);
+      // Add to following activities
+      setFollowingActivities(prev => {
+        const existingGroupIndex = prev.findIndex(g => g.user === latestTrade.user);
+        const newTrade = { id: latestTrade.id, marketId: latestTrade.marketId, side: latestTrade.side, amount: latestTrade.amount, time: latestTrade.time };
+        
+        if (existingGroupIndex >= 0) {
+          const newGroups = [...prev];
+          newGroups[existingGroupIndex] = {
+            ...newGroups[existingGroupIndex],
+            trades: [newTrade, ...newGroups[existingGroupIndex].trades].slice(0, 5)
+          };
+          return newGroups;
+        } else {
+          return [{
+            id: `group-${Date.now()}`,
+            user: latestTrade.user,
+            avatar: latestTrade.avatar,
+            level: latestTrade.level || 1,
+            accuracy: latestTrade.accuracy || 50,
+            badge: latestTrade.badge,
+            trades: [newTrade]
+          }, ...prev].slice(0, 20);
+        }
+      });
+    }, 0);
+  }, [recentTrades]);
 
   const handleScroll = useCallback(() => {
     if (!containerRef.current) return;
@@ -1483,14 +1663,14 @@ export default function Page() {
     }
   }, [activeIndex]);
 
-  const handleTrade = useCallback((market: typeof MARKETS[0], side: 'YES' | 'NO') => {
+  const handleTrade = useCallback((market: Market, side: 'YES' | 'NO') => {
     setSelectedMarket(market);
     setTradeSide(side);
     setTradeStake(50);
     setTradeModalOpen(true);
   }, []);
 
-  const handleCopyTrade = useCallback((market: typeof MARKETS[0], side: 'YES' | 'NO', amount: number) => {
+  const handleCopyTrade = useCallback((market: Market, side: 'YES' | 'NO', amount: number) => {
     setSelectedMarket(market);
     setTradeSide(side);
     setTradeStake(amount);
@@ -1501,57 +1681,116 @@ export default function Page() {
     setSelectedTrader(trader);
   }, []);
 
-  const handleConfirmTrade = useCallback((marketId: string, side: 'YES' | 'NO', amount: number, price: number) => {
-    setPositions(prev => ({ ...prev, [marketId]: { side, amount, price } }));
-    setToast({ visible: true, side, amount, price });
-    setTradeModalOpen(false);
+  const [resolvedMarkets, setResolvedMarkets] = useState<Record<string, { result: 'YES' | 'NO', payout: number }>>({});
+  const [userBalance, setUserBalance] = useState(1240.50);
+  const [showBonus, setShowBonus] = useState(false);
+  const [shareModalData, setShareModalData] = useState<{ type: 'TRADE' | 'WIN', amount: number, marketQuestion: string } | null>(null);
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const urlParams = new URLSearchParams(window.location.search);
+      const refCode = urlParams.get('ref');
+      
+      const hasClaimed = localStorage.getItem('predix_bonus_claimed');
+      
+      if (refCode && !hasClaimed) {
+        localStorage.setItem('predix_ref', refCode);
+        
+        // Simulate signup flow & bonus
+        setTimeout(() => {
+          setShowBonus(true);
+          setUserBalance(prev => prev + 50);
+          localStorage.setItem('predix_bonus_claimed', 'true');
+          localStorage.removeItem('predix_ref');
+        }, 1500);
+      }
+    }
+  }, []);
+
+  const handleResolveMarket = useCallback((marketId: string, result: 'YES' | 'NO') => {
+    const position = positions[marketId];
+    let payout = 0;
     
-    // Trigger immediate market reaction for the user's trade
-    setLiveUpdates(prev => {
-      const marketData = markets.find(m => m.id === marketId);
-      const current = prev[marketId] || { 
-        yesPercent: marketData?.yesPercent || 50,
-        noPercent: marketData?.noPercent || 50,
-        volume: marketData?.volume || 0,
-        participants: marketData?.participants || 0
-      };
-      
-      // User trades move the market more (1 to 3%)
-      const shift = (Math.random() * 2) + 1;
-      let newYes = side === 'YES' ? current.yesPercent + shift : current.yesPercent - shift;
-      newYes = Math.max(1, Math.min(99, newYes));
-      
-      return {
-        ...prev,
-        [marketId]: {
-          yesPercent: newYes,
-          noPercent: 100 - newYes,
-          volume: current.volume + amount,
-          participants: current.participants + 1,
-          flashSide: side,
-          newActivity: {
-            id: `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`,
-            user: 'You',
-            avatar: 'https://picsum.photos/seed/you/32/32',
-            action: `bought $${amount} ${side}`,
-            side: side
-          }
-        }
-      };
-    });
+    if (position) {
+      if (position.side === result) {
+        // Win
+        const shares = Math.floor((position.amount / position.price) * 100);
+        payout = shares; // 1 share = $1 on win
+        setUserBalance(prev => prev + payout);
+        
+        setTimeout(() => {
+          setShareModalData({
+            type: 'WIN',
+            amount: payout - position.amount,
+            marketQuestion: MARKETS.find(m => m.id === marketId)?.question || ''
+          });
+        }, 1000);
+      }
+    }
+
+    setResolvedMarkets(prev => ({ ...prev, [marketId]: { result, payout } }));
+    
+    // Show toast
+    setToast({ 
+      visible: true, 
+      side: result, 
+      amount: payout, 
+      price: 100,
+      isResolve: true,
+      won: position?.side === result
+    } as any);
 
     setTimeout(() => {
-      setLiveUpdates(prev => ({
-        ...prev,
-        [marketId]: { ...prev[marketId], flashSide: null }
-      }));
+      setToast(null);
+    }, 4000);
+  }, [positions]);
+
+  const handleConfirmTrade = useCallback(async (marketId: string, side: 'YES' | 'NO', amount: number, price: number) => {
+    const { success, error } = await placeTrade(marketId, side, amount);
+    
+    if (!success) {
+      // Handle error (e.g., show error toast)
+      console.error(error);
+      return false;
+    }
+
+    setUserBalance(prev => prev - amount);
+    setPositions(prev => ({ ...prev, [marketId]: { side, amount, price } }));
+    setToast({ visible: true, side, amount, price });
+    
+    const shares = Math.floor((amount / price) * 100);
+    const potentialPayout = shares;
+    const profit = potentialPayout - amount;
+
+    setTimeout(() => {
+      setShareModalData({
+        type: 'TRADE',
+        amount: profit,
+        marketQuestion: MARKETS.find(m => m.id === marketId)?.question || ''
+      });
     }, 500);
+    
+    // Trigger immediate market reaction for the user's trade
+    const marketData = markets.find(m => m.id === marketId);
+    if (marketData) {
+      const newYesPool = side === 'YES' ? marketData.yesPool + amount : marketData.yesPool;
+      const newNoPool = side === 'NO' ? marketData.noPool + amount : marketData.noPool;
+      
+      updateMarket(marketId, {
+        yesPool: newYesPool,
+        noPool: newNoPool,
+        volume: marketData.volume + amount,
+        participants: marketData.participants + 1,
+      });
+    }
 
     // Auto-hide toast
     setTimeout(() => {
       setToast(null);
     }, 3000);
-  }, [markets]);
+
+    return true;
+  }, [markets, placeTrade, updateMarket]);
 
   return (
     <main className="h-[100dvh] w-full bg-background overflow-hidden relative">
@@ -1589,16 +1828,34 @@ export default function Page() {
                 className="h-full w-full overflow-y-auto snap-y snap-mandatory hide-scrollbar"
               >
                 {markets.map((market, index) => (
-                  <FeedItem 
-                    key={market.id} 
-                    market={market} 
-                    isActive={index === activeIndex} 
-                    onTrade={handleTrade}
-                    position={positions[market.id]}
-                    liveUpdate={liveUpdates[market.id]}
-                    onOpenTrader={handleOpenTrader}
-                    onCopyTrade={handleCopyTrade}
-                  />
+                  <div key={market.id} className="relative">
+                    <FeedItem 
+                      market={market} 
+                      isActive={index === activeIndex} 
+                      onTrade={handleTrade}
+                      position={positions[market.id]}
+                      onOpenTrader={handleOpenTrader}
+                      onCopyTrade={handleCopyTrade}
+                      resolvedState={resolvedMarkets[market.id]}
+                    />
+                    {/* DEV ONLY: Resolve Market Buttons */}
+                    {index === activeIndex && !resolvedMarkets[market.id] && (
+                      <div className="absolute top-24 right-4 z-50 flex flex-col gap-2">
+                        <button 
+                          onClick={() => handleResolveMarket(market.id, 'YES')}
+                          className="bg-yes/20 text-yes border border-yes/50 px-3 py-1 rounded-full text-xs font-bold backdrop-blur-md"
+                        >
+                          Resolve YES
+                        </button>
+                        <button 
+                          onClick={() => handleResolveMarket(market.id, 'NO')}
+                          className="bg-no/20 text-no border border-no/50 px-3 py-1 rounded-full text-xs font-bold backdrop-blur-md"
+                        >
+                          Resolve NO
+                        </button>
+                      </div>
+                    )}
+                  </div>
                 ))}
               </div>
             ) : (
@@ -1613,10 +1870,10 @@ export default function Page() {
       )}
 
       <div className="relative z-30 h-full">
-        {activeTab === 'portfolio' && <PortfolioView positions={positions} markets={markets} />}
-        {activeTab === 'markets' && <MarketsView onTrade={handleTrade} markets={markets} />}
+        {activeTab === 'portfolio' && <PortfolioView positions={positions} markets={markets} resolvedMarkets={resolvedMarkets} userBalance={userBalance} />}
+        {activeTab === 'markets' && <MarketsView onTrade={handleTrade} markets={markets} resolvedMarkets={resolvedMarkets} />}
         {activeTab === 'create' && <CreateView />}
-        {activeTab === 'profile' && <ProfileView />}
+        {activeTab === 'profile' && <ProfileView userBalance={userBalance} />}
       </div>
 
       {/* Navigation */}
@@ -1642,6 +1899,9 @@ export default function Page() {
         onToggleFollow={handleToggleFollow}
       />
 
+      <BonusPopup isOpen={showBonus} onClose={() => setShowBonus(false)} amount={50} />
+      <ShareModal data={shareModalData} onClose={() => setShareModalData(null)} />
+
       {/* TOAST */}
       <AnimatePresence>
         {toast && (
@@ -1653,17 +1913,29 @@ export default function Page() {
             style={{ marginTop: 'env(safe-area-inset-top)' }}
           >
             <div className={`glass-panel w-full px-6 py-4 flex items-center gap-4 border ${
-              toast.side === 'YES' ? 'border-yes/50 shadow-[0_10px_40px_rgba(0,255,136,0.3)]' : 'border-no/50 shadow-[0_10px_40px_rgba(255,51,102,0.3)]'
+              (toast as any).isResolve 
+                ? (toast as any).won ? 'border-yes/50 shadow-[0_10px_40px_rgba(0,255,136,0.3)]' : 'border-no/50 shadow-[0_10px_40px_rgba(255,51,102,0.3)]'
+                : toast.side === 'YES' ? 'border-yes/50 shadow-[0_10px_40px_rgba(0,255,136,0.3)]' : 'border-no/50 shadow-[0_10px_40px_rgba(255,51,102,0.3)]'
             }`}>
               <div className={`w-10 h-10 rounded-full flex items-center justify-center ${
-                toast.side === 'YES' ? 'bg-yes/20 text-yes' : 'bg-no/20 text-no'
+                (toast as any).isResolve
+                  ? (toast as any).won ? 'bg-yes/20 text-yes' : 'bg-no/20 text-no'
+                  : toast.side === 'YES' ? 'bg-yes/20 text-yes' : 'bg-no/20 text-no'
               }`}>
                 <CircleCheck size={24} />
               </div>
               <div>
-                <h4 className="font-bold text-white">Trade Executed</h4>
+                <h4 className="font-bold text-white">{(toast as any).isResolve ? 'Market Resolved' : 'Trade Executed'}</h4>
                 <p className="text-sm text-white/70">
-                  Bought <span className={toast.side === 'YES' ? 'text-yes font-bold' : 'text-no font-bold'}>{toast.side}</span> for ${toast.amount} @ {toast.price}¢
+                  {(toast as any).isResolve ? (
+                    (toast as any).won ? (
+                      <>You won <span className="text-yes font-bold">${toast.amount}</span></>
+                    ) : (
+                      <>You lost your position</>
+                    )
+                  ) : (
+                    <>Bought <span className={toast.side === 'YES' ? 'text-yes font-bold' : 'text-no font-bold'}>{toast.side}</span> for ${toast.amount} @ {toast.price}¢</>
+                  )}
                 </p>
               </div>
             </div>
